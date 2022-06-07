@@ -1,0 +1,191 @@
+---
+title: "Three-machine comparison"
+author: "Quentin D. Read"
+date: "5/17/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+Here is some exploratory analysis in R of the three-machine comparison. I will translate later to SAS but in the interest of doing it quickly, I wrote this code in R.
+
+# Setup
+
+Load necessary packages and data. Only the first eight columns are needed.
+
+```{r}
+library(data.table)
+library(ggplot2)
+library(lme4)
+library(emmeans)
+library(multcomp)
+
+theme_set(theme_bw() +
+            theme(panel.grid.minor = element_blank(),
+                  strip.background = element_blank()))
+
+dat <- fread('project/Three Machine Anova Individual Measurements.csv', na.strings = '.')[, 1:8]
+```
+
+I noticed that trial U7, plot 212, year 2019 has duplicate measurements for some of the reps. I just removed that one to avoid any potential error.
+
+```{r}
+dat <- dat[!(Trial %in% 'U7' & Plot %in% 212 & Year %in% 2019)]
+```
+
+
+Reshape the data so that each machine has its own column.
+
+```{r}
+dat_wide <- dcast(dat, Trial + Year + Plot + Rep ~ Machine, value.var = 'TW') 
+```
+
+
+# Exploratory graphs
+
+Look at the relationship between the different machines' readings. Ignore all random variation due to trial, plot, and rep for this graph. Superimpose a y = x line on the graph (the ideal relationship).
+
+First look at GAC versus Volumetric.
+
+```{r}
+ggplot(dat_wide, aes(x = Vol, y = GAC)) + 
+  geom_point() +
+  geom_abline(slope = 1, color = 'red') +
+  labs(x = 'Volumetric')
+```
+
+The GAC vs. Volumetric shows a little bit of a sigmoid trend to the eye. There are a lot of outliers where the GAC machine gave a really off reading. Also it looks like GAC tends to overestimate the TW relative to Volumetric (most of the points are above the red line).
+
+Next Perten vs. Volumetric.
+
+```{r}
+ggplot(dat_wide, aes(x = Vol, y = Perten)) + 
+  geom_point() +
+  geom_abline(slope = 1, color = 'red') +
+  labs(x = 'Volumetric')
+```
+
+Here to my eye I see less of a bias but maybe still Perten is slightly higher than Volumetric. It has fewer outliers as well.
+
+# Overall difference
+
+Model to compare the overall difference in means. We account for all the sources of random variation too. Trial is crossed with year, and plot is nested within trial.
+
+```{r}
+overall_model <- lmer(TW ~ Machine + (1|Year) + (1|Trial) + (1|Plot:Trial), data = dat)
+```
+
+Extract the least-square means and take contrasts (Tukey adjustment). Even after correcting for all sources of random variation due to the design of the field trial, we still get significant differences between the three machines as seen by the Tukey-adjusted 95% confidence intervals. The eyeball test that Perten and GAC have an upward bias, and that the one for GAC is bigger, is confirmed. 
+
+```{r}
+overall_means <- emmeans(overall_model, ~ Machine, pbkrtest.limit = 6000)
+cld(overall_means, adjust = 'tukey', Letters = letters)
+```
+
+# Linear vs. nonlinear relationship
+
+Next let's try out some nonlinear curve fitting. We will fit four functional forms, in order of increasing complexity (number of parameters), they are:
+
+- Linear
+- Asymptotic (slope flattens as x increases)
+- Sigmoid or Logistic, aka Gompertz curve (slope flattens as x both increases and decreases)
+- Generalized Logistic, aka Richards curve (also sigmoid, but allows asymmetrical shapes)
+
+Because adding more parameters always improves fit, we will use the AIC information criterion to determine whether adding the additional parameters improves fit enough to justify the increased complexity.
+
+The linear function we will use is the simple two-parameter function with an intercept and slope parameter:
+
+$$y = \beta_0 + \beta_1x$$
+
+The asymptotic function we will use has three parameters.
+
+$$y = \frac{L}{1 + e^{-k(x - x_{mid})}}$$
+
+- $L$: The asymptote of the curve (the y value approached as x increases to infinity)
+- $k$: The slope of the curve (the rate at which y increases as x increases, for the middle portion of the curve)
+- $x_{mid}$: The midpoint of the curve (the value of x where y is 50% of the asymptote value). 
+
+The sigmoid or logistic function also has three parameters.
+
+$$y = A + \frac{K - A}{1 + e^{-Bx}}$$
+
+- $A$: The lower asymptote
+- $K$: The upper asymptote (also known as carrying capacity)
+- $B$: The growth rate
+
+The [generalized logistic](https://en.wikipedia.org/wiki/Generalised_logistic_function) has five parameters.
+
+$$y = A + \frac{K - A}{(1 + Qe^{-Bx})^{1/\nu}}$$
+
+- $A$: The lower asymptote
+- $K$: The upper asymptote (carrying capacity)
+- $B$: The growth rate
+- $\nu$: A parameter which allows the curve to be asymmetrical
+- $Q$: A parameter related to the initial condition
+
+Define functions for each of these other than the linear.
+
+```{r}
+asymptotic <- function(x, L, k, x_mid) L / (1 + exp(-k * (x - x_mid)))
+logistic <- function(x, A, K, B) A + (K - A) / (1 + exp(-B * x))
+generalized_logistic <- function(x, A, K, B, Q, nu) A + (K - A) / (1 + Q * exp(-B * x)) ^ (1/nu)
+```
+
+
+For now, we will not use any of the additional information about the design of the field trial. Nonlinear models with random effects on any or all of the parameters can be fit but we are starting out simpler. This will probably not give quite accurate results for the uncertainty around the predictions but if we are not necessarily interested in that, this will be an adequate way to do it. I am averaging the three samples from each plot.
+
+```{r}
+dat_by_plot <- dat[, .(TW = mean(TW)), by = .(Trial, Machine, Year, Plot)] |>
+  dcast(Trial + Year + Plot ~ Machine)
+```
+
+Do the fits for GAC versus Volumetric. Use sensible guesses as starting values for parameters. 
+
+```{r}
+dat_gac <- dat_by_plot[!is.na(GAC) & !is.na(Vol)]
+
+fit_GAC_line <- lm(GAC ~ Vol, data = dat_wide)
+
+fit_GAC_asym <- nls(GAC ~ L / (1 + exp(-k * (Vol - x_mid))),
+                    data = dat_gac,
+                    start = list(L = max(dat_gac[['GAC']]), k = 1, x_mid = median(dat_gac[['GAC']])),
+                    algorithm = 'port')
+
+fit_GAC_logi <- nls(GAC ~ A + (K - A) / (1 + exp(-B * Vol)),
+                    data = dat_gac,
+                    start = list(A = min(dat_gac[['GAC']]), K = max(dat_gac[['GAC']]), B = 0.01),
+                    algorithm = 'port')
+
+fit_GAC_genl4p <- nls(GAC ~ A + (K - A) / ((1 + exp(-B * Vol)) ^ (1/nu)),
+                    data = dat_gac,
+                    start = list(A = min(dat_gac[['GAC']]), K = max(dat_gac[['GAC']]), B = 0.05, nu = 1),
+                    algorithm = 'port', control = nls.control(maxiter = 500, warnOnly = TRUE))
+
+# fit_GAC_genl <- nls(GAC ~ A + (K - A) / ((1 + Q * exp(-B * Vol)) ^ (1/nu)),
+#                     data = dat_wide,
+#                     start = list(A = min(dat_gac[['GAC']]), K = max(dat_gac[['GAC']]), B = 0.1, Q = 1, nu = 1),
+#                     algorithm = 'plinear', control = nls.control(maxiter = 1000))
+```
+
+Make predictions from each fit and plot them on the graph with the raw data.
+
+```{r}
+pred_dat <- data.frame(Vol = seq(45, 60, length.out = 101))
+
+dat_gac_pred <- data.table(
+  Vol = pred_dat$Vol,
+  linear = predict(fit_GAC_line, newdata = pred_dat),
+  asymptotic = predict(fit_GAC_asym, newdata = pred_dat),
+  logistic = predict(fit_GAC_logi, newdata = pred_dat),
+  generalized_logistic = predict(fit_GAC_genl4p, newdata = pred_dat)
+)
+
+dat_gac_pred_long <- melt(dat_gac_pred, id.vars = 'Vol', value.name = 'GAC', variable.name = 'model')
+
+ggplot(mapping = aes(x = Vol, y = GAC)) +
+  geom_point(data = dat_gac) +
+  geom_line(data = dat_gac_pred_long, mapping = aes(color = model))
+```
+
