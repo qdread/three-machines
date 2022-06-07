@@ -4,14 +4,14 @@
 # See responses at https://discourse.mc-stan.org/t/issues-with-convergence-for-latent-variable-model-in-brms/27695/5
 
 ### run remotely with the following command
-### sbatch --job-name=set2const --ntasks=4 --mem=4gb --export=scriptname="soybean_machine_comparison/three_machine_fit_latent_set2constant.R" runjob.sh
+### sbatch --job-name=set2const --ntasks=4 --mem=4gb --export=scriptname="three_machine_fit_latent_set2constant.R" runjob.sh
 
 
 library(data.table)
 library(brms)
 
 # Set file path
-fp <- ifelse(Sys.info()['sysname'] == 'Windows', 'soybean_machine_comparison/project', '/project/qdr/ars_misc_data')
+fp <- ifelse(Sys.info()['sysname'] == 'Windows', 'project', '/project/qdr/ars_misc_data')
 
 options(mc.cores = 4, brms.backend = 'cmdstanr', brms.file_refit = 'always')
 
@@ -65,6 +65,7 @@ fit_latent_norescor_2constant <- brm(bf_gac + bf_vol + bf_per + bf_tw + set_resc
 library(tidybayes)
 library(dplyr)
 library(tidyr)
+library(ggplot2)
 
 # norescor model is used
 
@@ -90,3 +91,34 @@ TWtrue_quants <- TWtrue_draws %>%
   pivot_wider(names_from = p, values_from = q, names_prefix = 'q')
 
 # Relationship between observed reading from the model and the "true value"
+
+
+# Graphs of relationships -------------------------------------------------
+
+slope_draws <- fit_latent_norescor_2constant %>%
+  gather_draws(bsp_GAC_miTWtrue, bsp_Perten_miTWtrue)
+
+slope_quants <- slope_draws %>%
+  summarize(p = qprobs, q = quantile(.value, probs = qprobs)) %>%
+  pivot_wider(names_from = p, values_from = q, names_prefix = 'q')
+
+sigma_draws <- fit_latent_norescor_2constant %>%
+  gather_draws(sigma_GAC, sigma_Perten)
+
+sigma_quants <- sigma_draws %>%
+  summarize(p = qprobs, q = quantile(.value, probs = qprobs)) %>%
+  pivot_wider(names_from = p, values_from = q, names_prefix = 'q')
+
+ggplot(slope_draws, aes(x = .value, y = .variable)) + stat_halfeye() +
+  geom_vline(xintercept = 1, linetype = 'dashed', size = 1, color = 'indianred') +
+  geom_text(data = data.frame(.value = 1, .variable = 'Perten'), hjust = -0.1, label = 'slope of 1 =\nno systematic bias', y = 1.8) +
+  scale_y_discrete(labels = c('GAC', 'Perten')) +
+  scale_x_continuous(name = 'Slope of observed versus estimated true value') +
+  theme_classic() +
+  theme(axis.title.y = element_blank())
+
+ggplot(sigma_draws, aes(x = .value, y = .variable)) + stat_halfeye() +
+  scale_y_discrete(labels = c('GAC', 'Perten')) +
+  scale_x_continuous(name = 'Variability of reading') +
+  theme_classic() +
+  theme(axis.title.y = element_blank())
