@@ -5,7 +5,7 @@
 #SBATCH --partition=short
 #SBATCH --time=1-00:00:00
 
-cd /home/quentin.read/GitHub/ars-misc
+cd /home/quentin.read/GitHub/three-machines
 module load r/4.1.2
 Rscript2 ${scriptname}
 
