@@ -94,6 +94,9 @@ cld_within_GMD <- cld(emm_within_GMD, adjust = 'sidak', Letters = letters)
 contr_dat <- as.data.table(contr_within_GMD)
 contr_dat[, p.value := lapply(Rutilitybelt::pretty_sci_not(p.value), html)]
 
+# Correct p-value that rounded to zero to <1e9
+contr_dat$p.value[[2]] <- html('< 1 &times; 10<sup>-9</sup>')
+
 gt(as.data.table(cld_within_GMD)) %>%
   fmt_number(columns = c(2, 3, 5, 6), decimals = 3) %>%
   cols_label(response = 'within-sample variability', lower.CL = '95% CI lower', upper.CL = '95% CI upper', .group = '') %>%
