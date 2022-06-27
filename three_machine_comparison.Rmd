@@ -29,7 +29,7 @@ theme_set(theme_bw() +
             theme(panel.grid = element_blank(),
                   strip.background = element_blank()))
 
-dat <- fread('project/Three Machine Anova Individual Measurements.csv', na.strings = '.')[, 1:8]
+dat <- fread('Three Machine Anova Individual Measurements.csv', na.strings = '.')[, 1:8]
 ```
 
 I noticed that trial U7, plot 212, year 2019 has duplicate measurements for some of the reps. I just removed that one to avoid any potential error.
